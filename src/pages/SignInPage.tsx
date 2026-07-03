@@ -9,51 +9,40 @@ export default function SignInPage() {
   const { signIn } = useAuth();
   const { lang, setLang } = useLanguage();
 
-  const [email, setEmail]       = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading]   = useState(false);
+  const [universityId, setUniversityId] = useState('');
+  const [password, setPassword]         = useState('');
+  const [loading, setLoading]           = useState(false);
 
-  const t = {
-    ar: {
-      title: 'تسجيل الدخول',
-      subtitle: 'قسم العلوم الحياتية',
-      email: 'البريد الإلكتروني',
-      emailPh: 'example@mail.com',
-      password: 'كلمة المرور',
-      submit: 'دخول',
-      loading: 'جاري الدخول...',
-      forgotPw: 'نسيت كلمة المرور؟',
-      noAccount: 'ليس لديك حساب؟',
-      register: 'سجّل الآن',
-      switchLang: 'English',
-      copyright: '© 2026 قسم العلوم الحياتية – جامعة الحسين بن طلال | عمّار النوافلة',
-    },
-    en: {
-      title: 'Sign In',
-      subtitle: 'Life Sciences Department',
-      email: 'Email address',
-      emailPh: 'example@mail.com',
-      password: 'Password',
-      submit: 'Sign In',
-      loading: 'Signing in...',
-      forgotPw: 'Forgot password?',
-      noAccount: "Don't have an account?",
-      register: 'Register now',
-      switchLang: 'عربي',
-      copyright: '© 2026 Life Sciences Dept – Al-Hussein Bin Talal University | Ammar Al-Nawafla',
-    },
-  }[lang] ?? {
-    title: 'تسجيل الدخول', subtitle: 'قسم العلوم الحياتية', email: 'البريد الإلكتروني',
-    emailPh: 'example@mail.com', password: 'كلمة المرور', submit: 'دخول',
-    loading: 'جاري الدخول...', forgotPw: 'نسيت كلمة المرور؟', noAccount: 'ليس لديك حساب؟',
-    register: 'سجّل الآن', switchLang: 'English',
+  const t = lang === 'ar' ? {
+    title: 'تسجيل الدخول',
+    subtitle: 'قسم العلوم الحياتية',
+    uniId: 'الرقم الجامعي',
+    uniIdPh: 'مثال: 20210001',
+    password: 'كلمة المرور',
+    submit: 'دخول',
+    loading: 'جاري الدخول...',
+    noAccount: 'ليس لديك حساب؟',
+    register: 'سجّل الآن',
+    switchLang: 'English',
     copyright: '© 2026 قسم العلوم الحياتية – جامعة الحسين بن طلال | عمّار النوافلة',
+  } : {
+    title: 'Sign In',
+    subtitle: 'Life Sciences Department',
+    uniId: 'University ID',
+    uniIdPh: 'e.g. 20210001',
+    password: 'Password',
+    submit: 'Sign In',
+    loading: 'Signing in...',
+    noAccount: "Don't have an account?",
+    register: 'Register now',
+    switchLang: 'عربي',
+    copyright: '© 2026 Life Sciences Dept – Al-Hussein Bin Talal University | Ammar Al-Nawafla',
   };
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!email.trim()) {
-      toast.error(lang === 'ar' ? 'أدخل بريدك الإلكتروني' : 'Enter your email');
+    if (!universityId.trim()) {
+      toast.error(lang === 'ar' ? 'أدخل الرقم الجامعي' : 'Enter your university ID');
       return;
     }
     if (!password) {
@@ -63,7 +52,7 @@ export default function SignInPage() {
 
     setLoading(true);
     try {
-      await signIn(email.trim(), password);
+      await signIn(universityId.trim(), password);
       toast.success(lang === 'ar' ? 'مرحباً بك!' : 'Welcome back!');
       navigate('/dashboard');
     } catch (err: unknown) {
@@ -71,14 +60,9 @@ export default function SignInPage() {
       if (
         msg.includes('Invalid login') ||
         msg.includes('invalid_credentials') ||
-        msg.includes('wrong password') ||
         msg.includes('Invalid credentials')
       ) {
-        toast.error(lang === 'ar' ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة' : 'Invalid email or password');
-      } else if (msg.includes('تأكيد') || msg.includes('email not confirmed') || msg.includes('verified')) {
-        toast.error(lang === 'ar'
-          ? 'يرجى تأكيد بريدك الإلكتروني أولاً. تحقق من صندوق الوارد.'
-          : 'Please verify your email first. Check your inbox.');
+        toast.error(lang === 'ar' ? 'الرقم الجامعي أو كلمة المرور غير صحيحة' : 'Invalid university ID or password');
       } else {
         toast.error(msg);
       }
@@ -89,7 +73,6 @@ export default function SignInPage() {
 
   return (
     <div className="min-h-screen bg-hero-gradient flex flex-col">
-      {/* Lang toggle */}
       <div className="flex justify-end p-4">
         <button
           onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
@@ -101,7 +84,6 @@ export default function SignInPage() {
 
       <div className="flex-1 flex items-center justify-center px-4 py-8">
         <div className="w-full max-w-md">
-          {/* Header */}
           <div className="text-center mb-8">
             <div className="text-5xl mb-3">🔑</div>
             <h1 className="text-2xl font-black text-white mb-1">{t.title}</h1>
@@ -110,32 +92,25 @@ export default function SignInPage() {
 
           <div className="bg-white rounded-3xl p-8 shadow-card-md">
             <form onSubmit={handleSubmit} className="space-y-5">
-              {/* Email */}
+              {/* University ID */}
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">{t.email}</label>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">{t.uniId}</label>
                 <input
-                  type="email"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder={t.emailPh}
+                  type="text"
+                  value={universityId}
+                  onChange={e => setUniversityId(e.target.value)}
+                  placeholder={t.uniIdPh}
                   className="input-field"
                   required
                   dir="ltr"
-                  autoComplete="email"
+                  autoComplete="username"
+                  autoFocus
                 />
               </div>
 
               {/* Password */}
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-semibold text-gray-700">{t.password}</label>
-                  <Link
-                    to="/forgot-password"
-                    className="text-xs text-green-600 hover:underline font-medium"
-                  >
-                    {t.forgotPw}
-                  </Link>
-                </div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">{t.password}</label>
                 <input
                   type="password"
                   value={password}
@@ -148,11 +123,7 @@ export default function SignInPage() {
                 />
               </div>
 
-              <button
-                type="submit"
-                disabled={loading}
-                className="btn-primary w-full text-base"
-              >
+              <button type="submit" disabled={loading} className="btn-primary w-full text-base">
                 {loading ? (
                   <span className="flex items-center gap-2 justify-center">
                     <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
