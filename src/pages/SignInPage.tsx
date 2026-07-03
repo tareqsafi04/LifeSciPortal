@@ -7,44 +7,95 @@ import { useLanguage } from '@/contexts/LanguageContext';
 export default function SignInPage() {
   const navigate = useNavigate();
   const { signIn } = useAuth();
-  const { t, lang, setLang } = useLanguage();
+  const { lang, setLang } = useLanguage();
 
-  const [universityId, setUniversityId] = useState('');
+  const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading]   = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const t = {
+    ar: {
+      title: 'تسجيل الدخول',
+      subtitle: 'قسم العلوم الحياتية',
+      email: 'البريد الإلكتروني',
+      emailPh: 'example@mail.com',
+      password: 'كلمة المرور',
+      submit: 'دخول',
+      loading: 'جاري الدخول...',
+      forgotPw: 'نسيت كلمة المرور؟',
+      noAccount: 'ليس لديك حساب؟',
+      register: 'سجّل الآن',
+      switchLang: 'English',
+      copyright: '© 2026 قسم العلوم الحياتية – جامعة الحسين بن طلال | عمّار النوافلة',
+    },
+    en: {
+      title: 'Sign In',
+      subtitle: 'Life Sciences Department',
+      email: 'Email address',
+      emailPh: 'example@mail.com',
+      password: 'Password',
+      submit: 'Sign In',
+      loading: 'Signing in...',
+      forgotPw: 'Forgot password?',
+      noAccount: "Don't have an account?",
+      register: 'Register now',
+      switchLang: 'عربي',
+      copyright: '© 2026 Life Sciences Dept – Al-Hussein Bin Talal University | Ammar Al-Nawafla',
+    },
+  }[lang] ?? {
+    title: 'تسجيل الدخول', subtitle: 'قسم العلوم الحياتية', email: 'البريد الإلكتروني',
+    emailPh: 'example@mail.com', password: 'كلمة المرور', submit: 'دخول',
+    loading: 'جاري الدخول...', forgotPw: 'نسيت كلمة المرور؟', noAccount: 'ليس لديك حساب؟',
+    register: 'سجّل الآن', switchLang: 'English',
+    copyright: '© 2026 قسم العلوم الحياتية – جامعة الحسين بن طلال | عمّار النوافلة',
+  };
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-
-    if (!universityId.trim()) { toast.error(t('errorUnivId')); return; }
-    if (!password) { toast.error(t('errorPassword')); return; }
+    if (!email.trim()) {
+      toast.error(lang === 'ar' ? 'أدخل بريدك الإلكتروني' : 'Enter your email');
+      return;
+    }
+    if (!password) {
+      toast.error(lang === 'ar' ? 'أدخل كلمة المرور' : 'Enter your password');
+      return;
+    }
 
     setLoading(true);
     try {
-      await signIn(universityId.trim(), password);
-      toast.success(t('successLogin'));
+      await signIn(email.trim(), password);
+      toast.success(lang === 'ar' ? 'مرحباً بك!' : 'Welcome back!');
       navigate('/dashboard');
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : t('errorLoginFailed');
-      if (msg.includes('Invalid') || msg.includes('invalid') || msg.includes('credentials')) {
-        toast.error(t('errorLoginFailed'));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (
+        msg.includes('Invalid login') ||
+        msg.includes('invalid_credentials') ||
+        msg.includes('wrong password') ||
+        msg.includes('Invalid credentials')
+      ) {
+        toast.error(lang === 'ar' ? 'البريد الإلكتروني أو كلمة المرور غير صحيحة' : 'Invalid email or password');
+      } else if (msg.includes('تأكيد') || msg.includes('email not confirmed') || msg.includes('verified')) {
+        toast.error(lang === 'ar'
+          ? 'يرجى تأكيد بريدك الإلكتروني أولاً. تحقق من صندوق الوارد.'
+          : 'Please verify your email first. Check your inbox.');
       } else {
         toast.error(msg);
       }
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
     <div className="min-h-screen bg-hero-gradient flex flex-col">
-      {/* Language Toggle */}
+      {/* Lang toggle */}
       <div className="flex justify-end p-4">
         <button
           onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
           className="bg-white/20 hover:bg-white/30 text-white text-sm font-semibold px-4 py-2 rounded-full transition-all border border-white/20"
         >
-          {t('switchLang')}
+          {t.switchLang}
         </button>
       </div>
 
@@ -53,34 +104,38 @@ export default function SignInPage() {
           {/* Header */}
           <div className="text-center mb-8">
             <div className="text-5xl mb-3">🔑</div>
-            <h1 className="text-2xl font-black text-white mb-1">{t('loginAccount')}</h1>
-            <p className="text-green-300 text-sm">{t('deptName')}</p>
+            <h1 className="text-2xl font-black text-white mb-1">{t.title}</h1>
+            <p className="text-green-300 text-sm">{t.subtitle}</p>
           </div>
 
-          {/* Form Card */}
           <div className="bg-white rounded-3xl p-8 shadow-card-md">
             <form onSubmit={handleSubmit} className="space-y-5">
-              {/* University ID */}
+              {/* Email */}
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  {t('universityId')}
-                </label>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">{t.email}</label>
                 <input
-                  type="text"
-                  value={universityId}
-                  onChange={e => setUniversityId(e.target.value)}
-                  placeholder={lang === 'ar' ? 'أدخل رقمك الجامعي' : 'Enter your University ID'}
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder={t.emailPh}
                   className="input-field"
                   required
                   dir="ltr"
+                  autoComplete="email"
                 />
               </div>
 
               {/* Password */}
               <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  {t('password')}
-                </label>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm font-semibold text-gray-700">{t.password}</label>
+                  <Link
+                    to="/forgot-password"
+                    className="text-xs text-green-600 hover:underline font-medium"
+                  >
+                    {t.forgotPw}
+                  </Link>
+                </div>
                 <input
                   type="password"
                   value={password}
@@ -89,10 +144,10 @@ export default function SignInPage() {
                   className="input-field"
                   required
                   dir="ltr"
+                  autoComplete="current-password"
                 />
               </div>
 
-              {/* Submit */}
               <button
                 type="submit"
                 disabled={loading}
@@ -101,26 +156,22 @@ export default function SignInPage() {
                 {loading ? (
                   <span className="flex items-center gap-2 justify-center">
                     <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
                     </svg>
-                    {t('loading')}
+                    {t.loading}
                   </span>
-                ) : t('signIn')}
+                ) : t.submit}
               </button>
             </form>
 
-            {/* Link to sign up */}
             <p className="text-center text-sm text-gray-500 mt-6">
-              {t('noAccount')}{' '}
-              <Link to="/signup" className="text-green-700 font-semibold hover:underline">
-                {t('registerHere')}
-              </Link>
+              {t.noAccount}{' '}
+              <Link to="/signup" className="text-green-700 font-semibold hover:underline">{t.register}</Link>
             </p>
           </div>
 
-          {/* Copyright */}
-          <p className="text-center text-green-400/60 text-xs mt-6">{t('copyright')}</p>
+          <p className="text-center text-green-400/60 text-xs mt-6">{t.copyright}</p>
         </div>
       </div>
     </div>
