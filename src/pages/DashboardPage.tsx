@@ -6,8 +6,9 @@ import StudyPlanTab from '@/components/features/StudyPlanTab';
 import GPACalculatorTab from '@/components/features/GPACalculatorTab';
 import MaterialsExamsTab from '@/components/features/MaterialsExamsTab';
 import AdminTab from '@/pages/AdminPage';
+import ProfilePage from '@/pages/ProfilePage';
 
-type Tab = 'plan' | 'resources' | 'gpa' | 'admin';
+type Tab = 'plan' | 'resources' | 'gpa' | 'admin' | 'profile';
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -19,6 +20,7 @@ export default function DashboardPage() {
     { id: 'resources' as Tab, label: lang === 'ar' ? 'المواد والأسئلة' : 'Resources',    icon: '🗂️' },
     { id: 'gpa'       as Tab, label: t('gpaCalc'),                                        icon: '📊' },
     ...(user?.isAdmin ? [{ id: 'admin' as Tab, label: t('adminPanel'), icon: '👑' }] : []),
+    { id: 'profile' as Tab, label: lang === 'ar' ? 'الملف الشخصي' : 'Profile', icon: '👤' },
   ];
 
   return (
@@ -59,6 +61,7 @@ export default function DashboardPage() {
         {activeTab === 'resources' && <MaterialsExamsTab />}
         {activeTab === 'gpa'       && <GPACalculatorTab />}
         {activeTab === 'admin'     && user?.isAdmin && <AdminTab />}
+        {activeTab === 'profile'   && <ProfilePage />}
       </div>
 
       {/* Footer */}

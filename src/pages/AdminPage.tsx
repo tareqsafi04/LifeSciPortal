@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -14,29 +14,40 @@ interface Student {
   is_admin?: boolean;
 }
 
+const POLL_INTERVAL = 30_000; // 30 seconds
+
 export default function AdminPage() {
   const { user } = useAuth();
   const { t, lang } = useLanguage();
-  const [students, setStudents] = useState<Student[]>([]);
-  const [loading, setLoading]   = useState(true);
-  const [search, setSearch]     = useState('');
 
-  const fetchStudents = useCallback(async () => {
+  const [students, setStudents]     = useState<Student[]>([]);
+  const [loading, setLoading]       = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch]         = useState('');
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef  = useRef(true);
+
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+
+  // ── Fetch students ──────────────────────────────────────────────────────────
+  const fetchStudents = useCallback(async (silent = false) => {
     if (!user?.isAdmin) return;
-    setLoading(true);
+
+    if (!silent) setLoading(true);
+    else setRefreshing(true);
 
     try {
       const { data: sessionData } = await supabase.auth.getSession();
       const token = sessionData.session?.access_token;
 
       if (!token) {
-        toast.error(lang === 'ar' ? 'لا توجد جلسة نشطة' : 'No active session');
-        setLoading(false);
+        if (!silent) toast.error(lang === 'ar' ? 'لا توجد جلسة نشطة' : 'No active session');
         return;
       }
 
       const { data, error } = await supabase.functions.invoke('get-students', {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       if (error) {
@@ -46,24 +57,41 @@ export default function AdminPage() {
             const text = await error.context?.text();
             const parsed = JSON.parse(text || '{}');
             msg = parsed.error || msg;
-          } catch { /* keep original */ }
+          } catch { /* keep */ }
         }
-        toast.error(msg);
-        setLoading(false);
+        if (!silent) toast.error(msg);
         return;
       }
 
-      setStudents(data?.students ?? []);
+      if (mountedRef.current) {
+        setStudents(data?.students ?? []);
+        setLastUpdated(new Date());
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      toast.error(message);
+      if (!silent) toast.error(message);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [user, lang]);
 
-  useEffect(() => { fetchStudents(); }, [fetchStudents]);
+  // Initial fetch + polling
+  useEffect(() => {
+    fetchStudents(false);
 
+    intervalRef.current = setInterval(() => {
+      fetchStudents(true);
+    }, POLL_INTERVAL);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [fetchStudents]);
+
+  // ── Access guard ────────────────────────────────────────────────────────────
   if (!user?.isAdmin) {
     return (
       <div className="card p-10 text-center">
@@ -73,32 +101,62 @@ export default function AdminPage() {
     );
   }
 
-  const filtered = students.filter(s =>
+  // ── Derived data ────────────────────────────────────────────────────────────
+  const filtered   = students.filter(s =>
     !search ||
     s.university_id?.toLowerCase().includes(search.toLowerCase()) ||
     s.full_name?.toLowerCase().includes(search.toLowerCase())
   );
-
-  const nonAdmins = students.filter(s => !s.is_admin);
-  const thisMonth = students.filter(s => {
+  const nonAdmins  = students.filter(s => !s.is_admin);
+  const admins     = students.filter(s => s.is_admin);
+  const now        = new Date();
+  const thisMonth  = students.filter(s => {
     if (!s.created_at) return false;
-    const d = new Date(s.created_at), now = new Date();
+    const d = new Date(s.created_at);
     return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
   });
 
+  function formatTime(d: Date) {
+    return d.toLocaleTimeString(lang === 'ar' ? 'ar-JO' : 'en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6 animate-fade-in">
+
+      {/* Live indicator + last update */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className={`w-2.5 h-2.5 rounded-full ${refreshing ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 animate-pulse'}`} />
+          <span className="text-xs text-gray-500">
+            {refreshing
+              ? (lang === 'ar' ? 'جاري التحديث...' : 'Refreshing...')
+              : (lang === 'ar' ? 'مباشر – يتحدث كل 30 ثانية' : 'Live – updates every 30s')}
+          </span>
+        </div>
+        {lastUpdated && (
+          <span className="text-xs text-gray-400">
+            {lang === 'ar' ? 'آخر تحديث: ' : 'Last update: '}
+            {formatTime(lastUpdated)}
+          </span>
+        )}
+      </div>
+
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {[
-          { icon: '👥', value: nonAdmins.length,                      label: t('studentsCount'),                                           color: 'text-green-700'  },
-          { icon: '📅', value: thisMonth.length,                       label: lang === 'ar' ? 'مسجلون هذا الشهر'   : 'Registered this month', color: 'text-blue-600'   },
-          { icon: '👑', value: students.filter(s => s.is_admin).length,label: lang === 'ar' ? 'المشرفون'            : 'Admins',               color: 'text-amber-600'  },
-          { icon: '📊', value: students.length,                        label: lang === 'ar' ? 'إجمالي المستخدمين'  : 'Total Users',          color: 'text-purple-600' },
+          { icon: '🎓', value: nonAdmins.length,  label: t('studentsCount'),                                              color: 'text-green-700'  },
+          { icon: '📅', value: thisMonth.length,   label: lang === 'ar' ? 'مسجلون هذا الشهر'    : 'Registered this month', color: 'text-blue-600'   },
+          { icon: '👑', value: admins.length,      label: lang === 'ar' ? 'المشرفون'             : 'Admins',               color: 'text-amber-600'  },
+          { icon: '📊', value: students.length,    label: lang === 'ar' ? 'إجمالي المستخدمين'   : 'Total Users',          color: 'text-purple-600' },
         ].map((s, i) => (
-          <div key={i} className="card p-4 text-center">
+          <div key={i} className="card p-4 text-center relative overflow-hidden">
             <div className="text-3xl mb-1">{s.icon}</div>
-            <div className={`text-3xl font-black ${s.color}`}>{s.value}</div>
+            <div className={`text-3xl font-black transition-all duration-300 ${s.color}`}>
+              {loading ? (
+                <span className="inline-block w-8 h-7 bg-gray-100 animate-pulse rounded" />
+              ) : s.value}
+            </div>
             <div className="text-xs text-gray-500 mt-1 leading-tight">{s.label}</div>
           </div>
         ))}
@@ -106,9 +164,17 @@ export default function AdminPage() {
 
       {/* Students list */}
       <div className="card overflow-hidden">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-wrap gap-2">
-          <h2 className="font-bold text-gray-800">{t('studentsList')}</h2>
-          <div className="flex items-center gap-2">
+        {/* Toolbar */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-wrap gap-3">
+          <h2 className="font-bold text-gray-800 flex items-center gap-2">
+            {t('studentsList')}
+            {!loading && (
+              <span className="text-xs font-normal text-gray-400 bg-gray-100 rounded-full px-2 py-0.5">
+                {filtered.length}
+              </span>
+            )}
+          </h2>
+          <div className="flex items-center gap-2 flex-wrap">
             <input
               type="text"
               value={search}
@@ -117,22 +183,33 @@ export default function AdminPage() {
               className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-green-400 w-44"
             />
             <button
-              onClick={fetchStudents}
-              className="btn-secondary py-2 px-3 text-sm"
-              disabled={loading}
+              onClick={() => fetchStudents(false)}
+              className="btn-secondary py-2 px-3 text-sm flex items-center gap-1.5"
+              disabled={loading || refreshing}
             >
-              {loading ? '⏳' : '🔄'} {t('refreshData')}
+              <svg
+                className={`w-3.5 h-3.5 ${refreshing || loading ? 'animate-spin' : ''}`}
+                fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              {lang === 'ar' ? 'تحديث' : 'Refresh'}
             </button>
           </div>
         </div>
 
+        {/* Table */}
         {loading ? (
-          <div className="flex items-center justify-center py-16 text-gray-400">
-            <svg className="animate-spin w-6 h-6 me-2" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-            </svg>
-            {t('loading')}
+          <div className="space-y-0">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-4 px-5 py-3.5 border-b border-gray-50 animate-pulse">
+                <div className="w-6 h-4 bg-gray-100 rounded" />
+                <div className="w-20 h-4 bg-gray-100 rounded" />
+                <div className="w-32 h-4 bg-gray-100 rounded" />
+                <div className="flex-1 h-4 bg-gray-100 rounded hidden sm:block" />
+                <div className="w-16 h-6 bg-gray-100 rounded-full hidden md:block" />
+              </div>
+            ))}
           </div>
         ) : filtered.length === 0 ? (
           <div className="text-center py-16 text-gray-400">
@@ -144,32 +221,39 @@ export default function AdminPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  <th className="text-start px-4 py-3 font-semibold text-gray-700">#</th>
-                  <th className="text-start px-4 py-3 font-semibold text-gray-700">{t('universityIdCol')}</th>
-                  <th className="text-start px-4 py-3 font-semibold text-gray-700">{t('nameCol')}</th>
-                  <th className="text-start px-4 py-3 font-semibold text-gray-700 hidden sm:table-cell">{t('emailCol')}</th>
-                  <th className="text-start px-4 py-3 font-semibold text-gray-700 hidden md:table-cell">{t('joinDate')}</th>
-                  <th className="px-4 py-3 font-semibold text-gray-700 text-center">{lang === 'ar' ? 'النوع' : 'Type'}</th>
+                  <th className="text-start px-4 py-3 font-semibold text-gray-600 w-10">#</th>
+                  <th className="text-start px-4 py-3 font-semibold text-gray-600">{t('universityIdCol')}</th>
+                  <th className="text-start px-4 py-3 font-semibold text-gray-600">{t('nameCol')}</th>
+                  <th className="text-start px-4 py-3 font-semibold text-gray-600 hidden sm:table-cell">{t('emailCol')}</th>
+                  <th className="text-start px-4 py-3 font-semibold text-gray-600 hidden md:table-cell">{t('joinDate')}</th>
+                  <th className="px-4 py-3 font-semibold text-gray-600 text-center">{lang === 'ar' ? 'النوع' : 'Type'}</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((s, idx) => (
-                  <tr key={s.id} className={`border-b border-gray-50 hover:bg-gray-50 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
-                    <td className="px-4 py-3 text-gray-400 text-xs">{idx + 1}</td>
-                    <td className="px-4 py-3 font-mono font-semibold text-gray-800" dir="ltr">
-                      {s.university_id ?? '—'}
+                  <tr
+                    key={s.id}
+                    className={`border-b border-gray-50 hover:bg-green-50/30 transition-colors ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/20'}`}
+                  >
+                    <td className="px-4 py-3 text-gray-300 text-xs">{idx + 1}</td>
+                    <td className="px-4 py-3">
+                      <span className="font-mono font-semibold text-gray-800 bg-gray-100 px-2 py-0.5 rounded text-xs" dir="ltr">
+                        {s.university_id ?? '—'}
+                      </span>
                     </td>
                     <td className="px-4 py-3 font-medium text-gray-800">{s.full_name ?? '—'}</td>
-                    <td className="px-4 py-3 text-gray-500 hidden sm:table-cell text-xs" dir="ltr">{s.email}</td>
+                    <td className="px-4 py-3 text-gray-400 hidden sm:table-cell text-xs" dir="ltr">{s.email}</td>
                     <td className="px-4 py-3 text-gray-400 text-xs hidden md:table-cell" dir="ltr">
                       {s.created_at
-                        ? new Date(s.created_at).toLocaleDateString(lang === 'ar' ? 'ar-JO' : 'en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+                        ? new Date(s.created_at).toLocaleDateString(lang === 'ar' ? 'ar-JO' : 'en-US', {
+                            year: 'numeric', month: 'short', day: 'numeric'
+                          })
                         : '—'}
                     </td>
                     <td className="px-4 py-3 text-center">
                       {s.is_admin
-                        ? <span className="badge bg-amber-100 text-amber-700">👑 {t('adminBadge')}</span>
-                        : <span className="badge bg-green-100 text-green-700">🎓 {lang === 'ar' ? 'طالب' : 'Student'}</span>}
+                        ? <span className="badge bg-amber-100 text-amber-700 text-xs">👑 {t('adminBadge')}</span>
+                        : <span className="badge bg-green-100 text-green-700 text-xs">🎓 {lang === 'ar' ? 'طالب' : 'Student'}</span>}
                     </td>
                   </tr>
                 ))}
@@ -179,9 +263,9 @@ export default function AdminPage() {
         )}
       </div>
 
-      {/* Admin tip */}
+      {/* Tip */}
       <div className="card p-4 bg-amber-50 border border-amber-200">
-        <p className="text-amber-700 text-sm">
+        <p className="text-amber-700 text-sm leading-relaxed">
           <span className="font-bold">💡 {lang === 'ar' ? 'ملاحظة:' : 'Note:'}</span>{' '}
           {lang === 'ar'
             ? 'لمنح صلاحيات الإدارة لطالب، قم بتحديث حقل is_admin إلى true في جدول user_profiles عبر لوحة البيانات.'

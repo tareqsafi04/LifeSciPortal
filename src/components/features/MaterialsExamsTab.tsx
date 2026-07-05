@@ -9,6 +9,104 @@ interface SectionFile { id: string; section_id: string; name: string; file_path:
 
 type SubTab = 'materials' | 'exams';
 
+// ── PDF / Image Preview Modal ─────────────────────────────────────────────────
+function PreviewModal({
+  file,
+  url,
+  onClose,
+}: {
+  file: SectionFile;
+  url: string;
+  onClose: () => void;
+}) {
+  const isImage = file.file_type === 'image';
+  const isPpt   = file.file_type === 'ppt';
+
+  // Close on Escape
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-3 sm:p-6 animate-fade-in"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="relative bg-white rounded-2xl shadow-2xl flex flex-col w-full max-w-5xl"
+        style={{ maxHeight: '92vh' }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 flex-shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-xl">{isImage ? '🖼️' : isPpt ? '📊' : '📄'}</span>
+            <span className="font-semibold text-gray-800 truncate text-sm">{file.name}</span>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <a
+              href={url}
+              download={file.name}
+              className="text-xs text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1 border border-blue-200 rounded-lg px-3 py-1.5 hover:bg-blue-50 transition-colors"
+            >
+              ⬇️ تحميل
+            </a>
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1 border border-gray-200 rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors"
+            >
+              ↗️ فتح
+            </a>
+            <button
+              onClick={onClose}
+              className="w-8 h-8 rounded-full bg-gray-100 hover:bg-red-100 text-gray-500 hover:text-red-600 flex items-center justify-center font-bold transition-colors text-lg leading-none"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-hidden rounded-b-2xl bg-gray-100 min-h-0">
+          {isImage ? (
+            <div className="flex items-center justify-center h-full p-4 overflow-auto">
+              <img
+                src={url}
+                alt={file.name}
+                className="max-w-full max-h-full object-contain rounded-lg shadow-md"
+              />
+            </div>
+          ) : isPpt ? (
+            <div className="flex flex-col items-center justify-center h-full p-8 text-center gap-4">
+              <div className="text-6xl">📊</div>
+              <p className="text-gray-600 font-medium">ملف PowerPoint</p>
+              <p className="text-gray-400 text-sm">لا يمكن معاينة ملفات PowerPoint مباشرةً.</p>
+              <a
+                href={url}
+                download={file.name}
+                className="bg-orange-500 hover:bg-orange-600 text-white rounded-xl px-6 py-2.5 font-semibold text-sm transition-colors"
+              >
+                ⬇️ تحميل الملف
+              </a>
+            </div>
+          ) : (
+            /* PDF iframe */
+            <iframe
+              src={`${url}#toolbar=1&navpanes=1&scrollbar=1&view=FitH`}
+              title={file.name}
+              className="w-full h-full border-0"
+              style={{ minHeight: '70vh' }}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
 export default function MaterialsExamsTab() {
   const { user } = useAuth();
   const { lang } = useLanguage();
@@ -26,6 +124,7 @@ export default function MaterialsExamsTab() {
   const [editCat, setEditCat] = useState<'college' | 'major'>('major');
   const [uploading, setUploading] = useState<Record<string, boolean>>({});
   const [deleting, setDeleting] = useState<Set<string>>(new Set());
+  const [preview, setPreview] = useState<{ file: SectionFile; url: string } | null>(null);
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const mountedRef = useRef(true);
 
@@ -58,18 +157,21 @@ export default function MaterialsExamsTab() {
   const collegeSections = curSections.filter(s => s.category === 'college');
   const majorSections   = curSections.filter(s => s.category === 'major');
 
+  function getPublicUrl(path: string) {
+    const { data } = supabase.storage.from('course-files').getPublicUrl(path);
+    return data.publicUrl;
+  }
+
   // ── Admin: Add Section ──────────────────────────────────────────────────────
   async function addSection() {
-    const t = newTitle.trim();
-    if (!t) return;
+    const title = newTitle.trim();
+    if (!title) return;
     const { data, error } = await supabase.from(sectionsTable).insert({
-      title: t, category: newCategory, sort_order: curSections.length, created_by: user?.id
+      title, category: newCategory, sort_order: curSections.length, created_by: user?.id
     }).select().single();
     if (error) { toast.error(error.message); return; }
-    setSections(prev => ({
-      ...prev,
-      [subTab === 'materials' ? 'materials' : 'exams']: [...curSections, data]
-    }));
+    const key = subTab === 'materials' ? 'materials' : 'exams';
+    setSections(prev => ({ ...prev, [key]: [...prev[key], data] }));
     setNewTitle('');
     toast.success(lang === 'ar' ? 'تمت الإضافة' : 'Section added');
   }
@@ -86,15 +188,15 @@ export default function MaterialsExamsTab() {
   }
 
   async function saveEditTitle(id: string) {
-    const t = editTitle.trim();
-    if (!t) return;
+    const title = editTitle.trim();
+    if (!title) return;
     const key = subTab === 'materials' ? 'materials' : 'exams';
     setSections(prev => ({
       ...prev,
-      [key]: prev[key].map(s => s.id === id ? { ...s, title: t, category: editCat } : s)
+      [key]: prev[key].map(s => s.id === id ? { ...s, title, category: editCat } : s)
     }));
     setEditId(null);
-    await supabase.from(sectionsTable).update({ title: t, category: editCat }).eq('id', id);
+    await supabase.from(sectionsTable).update({ title, category: editCat }).eq('id', id);
     toast.success(lang === 'ar' ? 'تم التعديل' : 'Updated');
   }
 
@@ -140,11 +242,6 @@ export default function MaterialsExamsTab() {
     setDeleting(p => { const n = new Set(p); n.delete(file.id); return n; });
   }
 
-  function getPublicUrl(path: string) {
-    const { data } = supabase.storage.from('course-files').getPublicUrl(path);
-    return data.publicUrl;
-  }
-
   // ── Section renderer ────────────────────────────────────────────────────────
   function renderSection(sec: Section) {
     const secFiles = filesBySec(sec.id);
@@ -153,8 +250,11 @@ export default function MaterialsExamsTab() {
     const isDel = deleting.has(sec.id);
 
     return (
-      <div key={sec.id} className={`border border-gray-200 rounded-xl overflow-hidden transition-all duration-200 ${isDel ? 'opacity-40 scale-95' : ''}`}>
-        {/* Section header */}
+      <div
+        key={sec.id}
+        className={`border border-gray-200 rounded-xl overflow-hidden transition-all duration-200 ${isDel ? 'opacity-40 scale-95' : ''}`}
+      >
+        {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 bg-white hover:bg-gray-50 transition-colors">
           {editId === sec.id && isAdmin ? (
             <div className="flex gap-2 flex-1 me-2 flex-wrap">
@@ -198,7 +298,7 @@ export default function MaterialsExamsTab() {
           {isAdmin && editId !== sec.id && (
             <div className="flex items-center gap-1 ms-2 flex-shrink-0">
               <button
-                onClick={() => { setEditId(sec.id); setEditTitle(sec.title); setEditCat((sec.category as 'college' | 'major')); }}
+                onClick={() => { setEditId(sec.id); setEditTitle(sec.title); setEditCat(sec.category as 'college' | 'major'); }}
                 className="text-gray-400 hover:text-blue-600 text-xs px-1.5 py-1 rounded transition-colors"
                 title={lang === 'ar' ? 'تعديل' : 'Edit'}
               >✏️</button>
@@ -225,33 +325,60 @@ export default function MaterialsExamsTab() {
                   const isImage = f.file_type === 'image';
                   const isPpt = f.file_type === 'ppt';
                   const isFileDel = deleting.has(f.id);
+
                   return (
                     <div
                       key={f.id}
-                      className={`relative border border-gray-200 rounded-xl overflow-hidden bg-white hover:shadow-md transition-all duration-200 ${isFileDel ? 'opacity-40 scale-95' : ''}`}
+                      className={`relative border border-gray-200 rounded-xl overflow-hidden bg-white hover:shadow-md transition-all duration-200 group ${isFileDel ? 'opacity-40 scale-95' : ''}`}
                     >
-                      {isImage ? (
-                        <a href={url} target="_blank" rel="noopener noreferrer">
-                          <img src={url} alt={f.name} className="w-full h-28 object-cover" />
-                        </a>
-                      ) : (
-                        <a href={url} target="_blank" rel="noopener noreferrer"
-                          className={`flex flex-col items-center justify-center h-24 transition-colors ${
+                      {/* Clickable preview area */}
+                      <button
+                        className="w-full text-start"
+                        onClick={() => setPreview({ file: f, url })}
+                        title={lang === 'ar' ? 'معاينة' : 'Preview'}
+                      >
+                        {isImage ? (
+                          <div className="relative overflow-hidden">
+                            <img src={url} alt={f.name} className="w-full h-28 object-cover group-hover:scale-105 transition-transform duration-200" />
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                              <span className="opacity-0 group-hover:opacity-100 text-white text-2xl transition-opacity">🔍</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className={`flex flex-col items-center justify-center h-24 transition-colors relative ${
                             isPpt ? 'bg-orange-50 hover:bg-orange-100' : 'bg-red-50 hover:bg-red-100'
                           }`}>
-                          <span className="text-3xl mb-1">{isPpt ? '📊' : '📄'}</span>
-                          <span className={`text-xs font-semibold ${isPpt ? 'text-orange-600' : 'text-red-600'}`}>
-                            {isPpt ? 'PPT' : 'PDF'}
-                          </span>
-                        </a>
-                      )}
-                      <div className="p-2 flex items-center justify-between gap-1 bg-white">
+                            <span className="text-3xl mb-1">{isPpt ? '📊' : '📄'}</span>
+                            <span className={`text-xs font-semibold ${isPpt ? 'text-orange-600' : 'text-red-600'}`}>
+                              {isPpt ? 'PPT' : 'PDF'}
+                            </span>
+                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/5">
+                              <span className="bg-white/90 text-gray-700 text-xs font-semibold rounded-full px-2 py-0.5 shadow-sm">
+                                {lang === 'ar' ? 'معاينة' : 'Preview'}
+                              </span>
+                            </div>
+                          </div>
+                        )}
+                      </button>
+
+                      {/* File info row */}
+                      <div className="p-2 flex items-center justify-between gap-1 bg-white border-t border-gray-50">
                         <span className="text-xs text-gray-700 font-medium truncate flex-1" title={f.name}>{f.name}</span>
                         <div className="flex gap-0.5 flex-shrink-0">
-                          <a href={url} download={f.name} className="text-blue-400 hover:text-blue-600 text-xs p-1" title="Download">⬇️</a>
+                          <a
+                            href={url}
+                            download={f.name}
+                            className="text-blue-400 hover:text-blue-600 text-xs p-1 transition-colors"
+                            title={lang === 'ar' ? 'تحميل' : 'Download'}
+                            onClick={e => e.stopPropagation()}
+                          >⬇️</a>
                           {isAdmin && (
-                            <button onClick={() => deleteFile(f)} disabled={isFileDel}
-                              className="text-gray-300 hover:text-red-500 text-xs p-1 transition-colors disabled:cursor-not-allowed">✕</button>
+                            <button
+                              onClick={() => deleteFile(f)}
+                              disabled={isFileDel}
+                              className="text-gray-300 hover:text-red-500 text-xs p-1 transition-colors disabled:cursor-not-allowed"
+                              title={lang === 'ar' ? 'حذف' : 'Delete'}
+                            >✕</button>
                           )}
                         </div>
                       </div>
@@ -296,6 +423,7 @@ export default function MaterialsExamsTab() {
     );
   }
 
+  // ── Loading ─────────────────────────────────────────────────────────────────
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20 text-gray-400">
@@ -309,102 +437,113 @@ export default function MaterialsExamsTab() {
   }
 
   return (
-    <div className="space-y-5 animate-fade-in">
-      {/* Sub-tab switcher */}
-      <div className="flex gap-3 bg-white border border-gray-200 rounded-2xl p-1.5 shadow-sm">
-        {([
-          { id: 'materials' as SubTab, icon: '📖', ar: 'المواد الدراسية',  en: 'Course Materials' },
-          { id: 'exams'     as SubTab, icon: '📝', ar: 'أسئلة السنوات',    en: 'Past Exam Questions' },
-        ]).map(s => (
-          <button
-            key={s.id}
-            onClick={() => { setSubTab(s.id); setEditId(null); }}
-            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 ${
-              subTab === s.id
-                ? 'bg-green-800 text-white shadow-md'
-                : 'text-gray-500 hover:bg-gray-100'
-            }`}
-          >
-            <span>{s.icon}</span>
-            <span>{lang === 'ar' ? s.ar : s.en}</span>
-          </button>
-        ))}
-      </div>
+    <>
+      {/* Preview Modal */}
+      {preview && (
+        <PreviewModal
+          file={preview.file}
+          url={preview.url}
+          onClose={() => setPreview(null)}
+        />
+      )}
 
-      {/* Admin: Add section */}
-      {isAdmin && (
-        <div className="card p-4 bg-amber-50 border border-amber-200">
-          <p className="text-xs text-amber-700 font-semibold mb-3">
-            👑 {lang === 'ar' ? 'إضافة وحدة جديدة (للمشرف فقط)' : 'Add new section (Admin only)'}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <input
-              type="text"
-              value={newTitle}
-              onChange={e => setNewTitle(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && addSection()}
-              placeholder={lang === 'ar' ? 'اسم المادة...' : 'Section name...'}
-              className="flex-1 min-w-48 border border-amber-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500 bg-white"
-            />
-            <select
-              value={newCategory}
-              onChange={e => setNewCategory(e.target.value as 'college' | 'major')}
-              className="border border-amber-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none"
-            >
-              <option value="college">{lang === 'ar' ? 'اجباري كلية' : 'College Mandatory'}</option>
-              <option value="major">{lang === 'ar' ? 'اجباري تخصص' : 'Major Mandatory'}</option>
-            </select>
+      <div className="space-y-5 animate-fade-in">
+        {/* Sub-tab switcher */}
+        <div className="flex gap-3 bg-white border border-gray-200 rounded-2xl p-1.5 shadow-sm">
+          {([
+            { id: 'materials' as SubTab, icon: '📖', ar: 'المواد الدراسية',     en: 'Course Materials' },
+            { id: 'exams'     as SubTab, icon: '📝', ar: 'أسئلة السنوات',       en: 'Past Exam Questions' },
+          ]).map(s => (
             <button
-              onClick={addSection}
-              disabled={!newTitle.trim()}
-              className="bg-amber-600 hover:bg-amber-700 text-white rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-50 transition-colors"
+              key={s.id}
+              onClick={() => { setSubTab(s.id); setEditId(null); }}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200 ${
+                subTab === s.id
+                  ? 'bg-green-800 text-white shadow-md'
+                  : 'text-gray-500 hover:bg-gray-100'
+              }`}
             >
-              {lang === 'ar' ? '+ إضافة' : '+ Add'}
+              <span>{s.icon}</span>
+              <span>{lang === 'ar' ? s.ar : s.en}</span>
             </button>
-          </div>
+          ))}
         </div>
-      )}
 
-      {/* College Mandatory Group */}
-      {collegeSections.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-sky-200" />
-            <span className="text-xs font-bold text-sky-700 bg-sky-100 border border-sky-200 rounded-full px-3 py-1 flex-shrink-0">
-              🏛️ {lang === 'ar' ? 'اجباري كلية' : 'College Mandatory'}
-            </span>
-            <div className="h-px flex-1 bg-sky-200" />
+        {/* Admin: Add section */}
+        {isAdmin && (
+          <div className="card p-4 bg-amber-50 border border-amber-200">
+            <p className="text-xs text-amber-700 font-semibold mb-3">
+              👑 {lang === 'ar' ? 'إضافة وحدة جديدة (للمشرف فقط)' : 'Add new section (Admin only)'}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <input
+                type="text"
+                value={newTitle}
+                onChange={e => setNewTitle(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addSection()}
+                placeholder={lang === 'ar' ? 'اسم المادة...' : 'Section name...'}
+                className="flex-1 min-w-48 border border-amber-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-amber-500 bg-white"
+              />
+              <select
+                value={newCategory}
+                onChange={e => setNewCategory(e.target.value as 'college' | 'major')}
+                className="border border-amber-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none"
+              >
+                <option value="college">{lang === 'ar' ? 'اجباري كلية' : 'College Mandatory'}</option>
+                <option value="major">{lang === 'ar' ? 'اجباري تخصص' : 'Major Mandatory'}</option>
+              </select>
+              <button
+                onClick={addSection}
+                disabled={!newTitle.trim()}
+                className="bg-amber-600 hover:bg-amber-700 text-white rounded-lg px-4 py-2 text-sm font-semibold disabled:opacity-50 transition-colors"
+              >
+                {lang === 'ar' ? '+ إضافة' : '+ Add'}
+              </button>
+            </div>
           </div>
-          <div className="space-y-2">{collegeSections.map(renderSection)}</div>
-        </div>
-      )}
+        )}
 
-      {/* Major Mandatory Group */}
-      {majorSections.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <div className="h-px flex-1 bg-emerald-200" />
-            <span className="text-xs font-bold text-emerald-700 bg-emerald-100 border border-emerald-200 rounded-full px-3 py-1 flex-shrink-0">
-              🔬 {lang === 'ar' ? 'اجباري تخصص' : 'Major Mandatory'}
-            </span>
-            <div className="h-px flex-1 bg-emerald-200" />
+        {/* College Mandatory Group */}
+        {collegeSections.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="h-px flex-1 bg-sky-200" />
+              <span className="text-xs font-bold text-sky-700 bg-sky-100 border border-sky-200 rounded-full px-3 py-1 flex-shrink-0">
+                🏛️ {lang === 'ar' ? 'اجباري كلية' : 'College Mandatory'}
+              </span>
+              <div className="h-px flex-1 bg-sky-200" />
+            </div>
+            <div className="space-y-2">{collegeSections.map(renderSection)}</div>
           </div>
-          <div className="space-y-2">{majorSections.map(renderSection)}</div>
-        </div>
-      )}
+        )}
 
-      {/* Empty state */}
-      {curSections.length === 0 && (
-        <div className="card p-14 text-center">
-          <div className="text-5xl mb-4">{tabIcon}</div>
-          <p className="text-gray-400">
-            {lang === 'ar'
-              ? (subTab === 'materials' ? 'لا توجد مواد دراسية بعد' : 'لا توجد أسئلة سنوات بعد')
-              : (subTab === 'materials' ? 'No course materials yet' : 'No past exam questions yet')}
-          </p>
-          {isAdmin && <p className="text-xs text-amber-600 mt-2">{lang === 'ar' ? 'أضف وحدات من الأعلى' : 'Add sections above'}</p>}
-        </div>
-      )}
-    </div>
+        {/* Major Mandatory Group */}
+        {majorSections.length > 0 && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="h-px flex-1 bg-emerald-200" />
+              <span className="text-xs font-bold text-emerald-700 bg-emerald-100 border border-emerald-200 rounded-full px-3 py-1 flex-shrink-0">
+                🔬 {lang === 'ar' ? 'اجباري تخصص' : 'Major Mandatory'}
+              </span>
+              <div className="h-px flex-1 bg-emerald-200" />
+            </div>
+            <div className="space-y-2">{majorSections.map(renderSection)}</div>
+          </div>
+        )}
+
+        {/* Empty state */}
+        {curSections.length === 0 && (
+          <div className="card p-14 text-center">
+            <div className="text-5xl mb-4">{tabIcon}</div>
+            <p className="text-gray-400">
+              {lang === 'ar'
+                ? (subTab === 'materials' ? 'لا توجد مواد دراسية بعد' : 'لا توجد أسئلة سنوات بعد')
+                : (subTab === 'materials' ? 'No course materials yet' : 'No past exam questions yet')}
+            </p>
+            {isAdmin && <p className="text-xs text-amber-600 mt-2">{lang === 'ar' ? 'أضف وحدات من الأعلى' : 'Add sections above'}</p>}
+          </div>
+        )}
+      </div>
+    </>
   );
 }
