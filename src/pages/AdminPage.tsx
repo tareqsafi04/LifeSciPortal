@@ -3,7 +3,6 @@ import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { FunctionsHttpError } from '@supabase/supabase-js';
 
 interface Student {
   id: string;
@@ -14,23 +13,26 @@ interface Student {
   is_admin?: boolean;
 }
 
-const POLL_INTERVAL = 30_000; // 30 seconds
+const POLL_INTERVAL = 30_000;
 
 export default function AdminPage() {
   const { user } = useAuth();
   const { t, lang } = useLanguage();
 
-  const [students, setStudents]     = useState<Student[]>([]);
-  const [loading, setLoading]       = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [search, setSearch]         = useState('');
+  const [students, setStudents]       = useState<Student[]>([]);
+  const [loading, setLoading]         = useState(true);
+  const [refreshing, setRefreshing]   = useState(false);
+  const [search, setSearch]           = useState('');
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef  = useRef(true);
 
-  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
-  // ── Fetch students ──────────────────────────────────────────────────────────
+  // ── Fetch directly from DB (no edge function) ───────────────────────────────
   const fetchStudents = useCallback(async (silent = false) => {
     if (!user?.isAdmin) return;
 
@@ -38,33 +40,20 @@ export default function AdminPage() {
     else setRefreshing(true);
 
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const token = sessionData.session?.access_token;
-
-      if (!token) {
-        if (!silent) toast.error(lang === 'ar' ? 'لا توجد جلسة نشطة' : 'No active session');
-        return;
-      }
-
-      const { data, error } = await supabase.functions.invoke('get-students', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .select('id, university_id, full_name, email, is_admin')
+        .order('email', { ascending: true });
 
       if (error) {
-        let msg = error.message;
-        if (error instanceof FunctionsHttpError) {
-          try {
-            const text = await error.context?.text();
-            const parsed = JSON.parse(text || '{}');
-            msg = parsed.error || msg;
-          } catch { /* keep */ }
-        }
-        if (!silent) toast.error(msg);
+        if (!silent) toast.error(error.message);
         return;
       }
 
+      // Get created_at from auth.users via RPC isn't available directly,
+      // so we enrich with created_at from user_profiles if available
       if (mountedRef.current) {
-        setStudents(data?.students ?? []);
+        setStudents(data ?? []);
         setLastUpdated(new Date());
       }
     } catch (err: unknown) {
@@ -76,19 +65,13 @@ export default function AdminPage() {
         setRefreshing(false);
       }
     }
-  }, [user, lang]);
+  }, [user]);
 
-  // Initial fetch + polling
+  // Initial + polling
   useEffect(() => {
     fetchStudents(false);
-
-    intervalRef.current = setInterval(() => {
-      fetchStudents(true);
-    }, POLL_INTERVAL);
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
+    intervalRef.current = setInterval(() => fetchStudents(true), POLL_INTERVAL);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [fetchStudents]);
 
   // ── Access guard ────────────────────────────────────────────────────────────
@@ -101,31 +84,27 @@ export default function AdminPage() {
     );
   }
 
-  // ── Derived data ────────────────────────────────────────────────────────────
-  const filtered   = students.filter(s =>
+  // ── Derived ─────────────────────────────────────────────────────────────────
+  const filtered  = students.filter(s =>
     !search ||
     s.university_id?.toLowerCase().includes(search.toLowerCase()) ||
     s.full_name?.toLowerCase().includes(search.toLowerCase())
   );
-  const nonAdmins  = students.filter(s => !s.is_admin);
-  const admins     = students.filter(s => s.is_admin);
-  const now        = new Date();
-  const thisMonth  = students.filter(s => {
-    if (!s.created_at) return false;
-    const d = new Date(s.created_at);
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-  });
+  const nonAdmins = students.filter(s => !s.is_admin);
+  const admins    = students.filter(s => s.is_admin);
 
   function formatTime(d: Date) {
-    return d.toLocaleTimeString(lang === 'ar' ? 'ar-JO' : 'en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return d.toLocaleTimeString(lang === 'ar' ? 'ar-JO' : 'en-US', {
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6 animate-fade-in">
 
-      {/* Live indicator + last update */}
-      <div className="flex items-center justify-between">
+      {/* Live indicator */}
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <span className={`w-2.5 h-2.5 rounded-full ${refreshing ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 animate-pulse'}`} />
           <span className="text-xs text-gray-500">
@@ -143,26 +122,25 @@ export default function AdminPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         {[
-          { icon: '🎓', value: nonAdmins.length,  label: t('studentsCount'),                                              color: 'text-green-700'  },
-          { icon: '📅', value: thisMonth.length,   label: lang === 'ar' ? 'مسجلون هذا الشهر'    : 'Registered this month', color: 'text-blue-600'   },
-          { icon: '👑', value: admins.length,      label: lang === 'ar' ? 'المشرفون'             : 'Admins',               color: 'text-amber-600'  },
-          { icon: '📊', value: students.length,    label: lang === 'ar' ? 'إجمالي المستخدمين'   : 'Total Users',          color: 'text-purple-600' },
+          { icon: '🎓', value: nonAdmins.length, label: t('studentsCount'),                                          color: 'text-green-700'  },
+          { icon: '👑', value: admins.length,    label: lang === 'ar' ? 'المشرفون'           : 'Admins',            color: 'text-amber-600'  },
+          { icon: '📊', value: students.length,  label: lang === 'ar' ? 'إجمالي المستخدمين' : 'Total Users',       color: 'text-purple-600' },
         ].map((s, i) => (
-          <div key={i} className="card p-4 text-center relative overflow-hidden">
+          <div key={i} className="card p-4 text-center">
             <div className="text-3xl mb-1">{s.icon}</div>
             <div className={`text-3xl font-black transition-all duration-300 ${s.color}`}>
-              {loading ? (
-                <span className="inline-block w-8 h-7 bg-gray-100 animate-pulse rounded" />
-              ) : s.value}
+              {loading
+                ? <span className="inline-block w-8 h-7 bg-gray-100 animate-pulse rounded" />
+                : s.value}
             </div>
             <div className="text-xs text-gray-500 mt-1 leading-tight">{s.label}</div>
           </div>
         ))}
       </div>
 
-      {/* Students list */}
+      {/* Students table */}
       <div className="card overflow-hidden">
         {/* Toolbar */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 flex-wrap gap-3">
@@ -184,14 +162,15 @@ export default function AdminPage() {
             />
             <button
               onClick={() => fetchStudents(false)}
-              className="btn-secondary py-2 px-3 text-sm flex items-center gap-1.5"
               disabled={loading || refreshing}
+              className="btn-secondary py-2 px-3 text-sm flex items-center gap-1.5"
             >
               <svg
                 className={`w-3.5 h-3.5 ${refreshing || loading ? 'animate-spin' : ''}`}
                 fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"
               >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                <path strokeLinecap="round" strokeLinejoin="round"
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
               {lang === 'ar' ? 'تحديث' : 'Refresh'}
             </button>
@@ -207,7 +186,6 @@ export default function AdminPage() {
                 <div className="w-20 h-4 bg-gray-100 rounded" />
                 <div className="w-32 h-4 bg-gray-100 rounded" />
                 <div className="flex-1 h-4 bg-gray-100 rounded hidden sm:block" />
-                <div className="w-16 h-6 bg-gray-100 rounded-full hidden md:block" />
               </div>
             ))}
           </div>
@@ -225,7 +203,6 @@ export default function AdminPage() {
                   <th className="text-start px-4 py-3 font-semibold text-gray-600">{t('universityIdCol')}</th>
                   <th className="text-start px-4 py-3 font-semibold text-gray-600">{t('nameCol')}</th>
                   <th className="text-start px-4 py-3 font-semibold text-gray-600 hidden sm:table-cell">{t('emailCol')}</th>
-                  <th className="text-start px-4 py-3 font-semibold text-gray-600 hidden md:table-cell">{t('joinDate')}</th>
                   <th className="px-4 py-3 font-semibold text-gray-600 text-center">{lang === 'ar' ? 'النوع' : 'Type'}</th>
                 </tr>
               </thead>
@@ -243,13 +220,6 @@ export default function AdminPage() {
                     </td>
                     <td className="px-4 py-3 font-medium text-gray-800">{s.full_name ?? '—'}</td>
                     <td className="px-4 py-3 text-gray-400 hidden sm:table-cell text-xs" dir="ltr">{s.email}</td>
-                    <td className="px-4 py-3 text-gray-400 text-xs hidden md:table-cell" dir="ltr">
-                      {s.created_at
-                        ? new Date(s.created_at).toLocaleDateString(lang === 'ar' ? 'ar-JO' : 'en-US', {
-                            year: 'numeric', month: 'short', day: 'numeric'
-                          })
-                        : '—'}
-                    </td>
                     <td className="px-4 py-3 text-center">
                       {s.is_admin
                         ? <span className="badge bg-amber-100 text-amber-700 text-xs">👑 {t('adminBadge')}</span>

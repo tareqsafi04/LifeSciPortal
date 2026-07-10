@@ -17,14 +17,23 @@ serve(async (req) => {
       );
     }
 
-    const adminClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const serviceKey  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+    if (!supabaseUrl || !serviceKey) {
+      return new Response(
+        JSON.stringify({ error: 'Server configuration error' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const adminClient = createClient(supabaseUrl, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false }
+    });
 
     const email = `${universityId}@student.ahu.edu.jo`;
 
-    // Check if university ID already exists
+    // Check if university ID already registered
     const { data: existing } = await adminClient
       .from('user_profiles')
       .select('university_id')
@@ -38,19 +47,31 @@ serve(async (req) => {
       );
     }
 
-    // Use regular signUp with service role client (bypasses email confirmation)
-    const { data: authData, error: signUpError } = await adminClient.auth.signUp({
+    // Also check auth.users directly to handle partial registrations
+    const { data: authList } = await adminClient.auth.admin.listUsers();
+    const existingAuth = authList?.users?.find(u => u.email === email);
+    if (existingAuth) {
+      return new Response(
+        JSON.stringify({ error: 'الرقم الجامعي مسجل مسبقاً' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Create user with admin API (bypasses email confirmation automatically)
+    const { data: authData, error: createError } = await adminClient.auth.admin.createUser({
       email,
       password,
-      options: {
-        data: { full_name: fullName, username: universityId }
+      email_confirm: true,
+      user_metadata: {
+        full_name: fullName,
+        university_id: universityId,
       }
     });
 
-    if (signUpError) {
-      console.error('SignUp error:', signUpError.message);
+    if (createError) {
+      console.error('Create user error:', createError.message);
       return new Response(
-        JSON.stringify({ error: signUpError.message }),
+        JSON.stringify({ error: createError.message }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -63,12 +84,12 @@ serve(async (req) => {
       );
     }
 
-    console.log('User created:', user.id, 'confirmed:', user.email_confirmed_at);
+    console.log('User created:', user.id);
 
-    // Wait briefly for trigger to create profile
-    await new Promise(resolve => setTimeout(resolve, 500));
+    // Wait for trigger to create profile row
+    await new Promise(resolve => setTimeout(resolve, 600));
 
-    // Upsert user profile with university details
+    // Upsert profile with university details
     const { error: profileError } = await adminClient
       .from('user_profiles')
       .upsert({
@@ -77,14 +98,14 @@ serve(async (req) => {
         username: universityId,
         university_id: universityId,
         full_name: fullName,
-        is_admin: false
+        is_admin: false,
       }, { onConflict: 'id' });
 
     if (profileError) {
       console.error('Profile upsert error:', profileError.message);
     }
 
-    // Initialize default semesters (4 years × 2 semesters = 8)
+    // Initialize default semesters (4 years × 2 semesters)
     const defaultSemesters = [];
     for (let year = 1; year <= 4; year++) {
       for (let sem = 1; sem <= 2; sem++) {
@@ -92,7 +113,7 @@ serve(async (req) => {
           user_id: user.id,
           year_number: year,
           semester_number: sem,
-          type: 'regular'
+          type: 'regular',
         });
       }
     }
@@ -105,15 +126,15 @@ serve(async (req) => {
       console.error('Semesters init error:', semError.message);
     }
 
-    // Sign in to get a valid session
+    // Sign in to get session
     const { data: signInData, error: signInError } = await adminClient.auth.signInWithPassword({
       email,
-      password
+      password,
     });
 
     if (signInError) {
-      console.error('SignIn error:', signInError.message);
-      // Return success without session - user can sign in manually
+      console.error('SignIn after register error:', signInError.message);
+      // Account created but can't auto-login — user can sign in manually
       return new Response(
         JSON.stringify({ success: true, needsConfirmation: true }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -128,7 +149,7 @@ serve(async (req) => {
   } catch (err) {
     console.error('Unexpected error:', err);
     return new Response(
-      JSON.stringify({ error: 'حدث خطأ غير متوقع' }),
+      JSON.stringify({ error: 'حدث خطأ غير متوقع: ' + String(err) }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
